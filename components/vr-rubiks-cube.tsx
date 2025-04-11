@@ -2,19 +2,37 @@
 
 import { useState, useRef, useEffect } from "react"
 import { Canvas } from "@react-three/fiber"
-import { VRButton, XR, Controllers, Hands, Interactive } from "@react-three/xr"
+import { VRButton, XR, Interactive, useXR } from "@react-three/xr"
 import { Box, Text, OrbitControls } from "@react-three/drei"
-import { Vector3, Matrix4, Quaternion } from "three"
+import { Vector3, Matrix4, Quaternion, Group, Color } from "three"
+
+// Define types
+interface CubePiece {
+  position: [number, number, number]
+  colors: {
+    front?: string
+    back?: string
+    top?: string
+    bottom?: string
+    right?: string
+    left?: string
+  }
+}
+
+interface GrabbedFace {
+  piece: CubePiece
+  face: string
+}
 
 // Define the colors for the Rubik's cube faces
 const COLORS = {
-  white: "#FFFFFF",
-  yellow: "#FFFF00",
-  red: "#FF0000",
-  orange: "#FFA500",
-  blue: "#0000FF",
-  green: "#00FF00",
-  black: "#000000",
+  white: "#F8F8F8",    // Slightly off-white for better contrast
+  yellow: "#FFD700",   // Gold yellow
+  red: "#FF3333",      // Bright red
+  orange: "#FF8C00",   // Dark orange
+  blue: "#0066FF",     // Bright blue
+  green: "#00CC00",    // Bright green
+  black: "#1A1A1A",    // Dark gray for inner faces
 }
 
 // Define the cube size and spacing
@@ -23,19 +41,27 @@ const CUBE_SPACING = 1
 const CUBE_DIMENSIONS = 3 // 3x3x3 cube
 
 export default function VRRubiksCube() {
+  const { store } = useXR()
+
+  const handleEnterVR = () => {
+    store.enterVR()
+  }
+
   return (
     <>
-      <VRButton className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10" />
+      <button
+        onClick={handleEnterVR}
+        className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10 bg-blue-600 text-white px-4 py-2 rounded-md"
+      >
+        Enter VR
+      </button>
       <Canvas>
         <XR>
           <ambientLight intensity={0.5} />
           <pointLight position={[10, 10, 10]} intensity={1} />
-          <Controllers />
-          <Hands />
           <RubiksCube />
           <EnvironmentSetup />
         </XR>
-        {/* OrbitControls for non-VR mode */}
         <OrbitControls />
       </Canvas>
     </>
@@ -63,56 +89,61 @@ function EnvironmentSetup() {
 }
 
 function RubiksCube() {
-  // State to track the current state of the cube
-  const [cubeState, setCubeState] = useState(initializeCubeState())
-  const [selectedFace, setSelectedFace] = useState(null)
-  const [rotatingFace, setRotatingFace] = useState(null)
-  const cubeRef = useRef()
+  const [cubeState, setCubeState] = useState<CubePiece[]>(() => initializeCubeState())
+  const [grabbedFace, setGrabbedFace] = useState<GrabbedFace | null>(null)
+  const [rotationProgress, setRotationProgress] = useState(0)
+  const cubeRef = useRef<Group>(null)
+  const controllerRef = useRef<Group>(null)
+  const lastControllerPosition = useRef<Vector3>(new Vector3())
+  const rotationStart = useRef<Quaternion>(new Quaternion())
 
-  // Function to handle cube piece selection
-  const handleSelect = (piece, face) => {
-    if (rotatingFace) return
-
-    setSelectedFace({ piece, face })
+  // Function to handle face grabbing
+  const handleGrab = (piece: CubePiece, face: string) => {
+    if (grabbedFace) return
+    setGrabbedFace({ piece, face })
+    if (controllerRef.current) {
+      rotationStart.current.copy(controllerRef.current.quaternion)
+    }
   }
 
-  // Function to handle rotation of a face
-  const handleRotate = (direction) => {
-    if (!selectedFace || rotatingFace) return
+  // Function to handle face release
+  const handleRelease = () => {
+    if (!grabbedFace) return
 
-    const { piece, face } = selectedFace
-    const axis = getFaceAxis(face)
-    const layer = getLayerFromPosition(piece.position, axis)
-
-    setRotatingFace({
-      axis,
-      layer,
-      direction,
-      progress: 0,
-    })
-
-    // After animation completes, update the cube state
-    setTimeout(() => {
+    // Snap to nearest 90-degree rotation
+    const currentRotation = controllerRef.current?.quaternion || new Quaternion()
+    const rotationDiff = currentRotation.angleTo(rotationStart.current)
+    const snapAngle = Math.round(rotationDiff / (Math.PI / 2)) * (Math.PI / 2)
+    
+    if (Math.abs(snapAngle) > 0.1) {
+      const { piece, face } = grabbedFace
+      const axis = getFaceAxis(face)
+      const layer = getLayerFromPosition(piece.position, axis)
+      const direction = Math.sign(snapAngle)
+      
       setCubeState(rotateFace(cubeState, axis, layer, direction))
-      setRotatingFace(null)
-    }, 500)
-  }
-
-  // Set up keyboard controls for testing
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (!selectedFace) return
-
-      if (e.key === "ArrowRight") {
-        handleRotate(1)
-      } else if (e.key === "ArrowLeft") {
-        handleRotate(-1)
-      }
     }
 
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [selectedFace])
+    setGrabbedFace(null)
+    setRotationProgress(0)
+  }
+
+  // Update rotation during grab
+  useEffect(() => {
+    if (!grabbedFace || !controllerRef.current) return
+
+    const animate = () => {
+      if (!grabbedFace || !controllerRef.current) return
+
+      const currentRotation = controllerRef.current.quaternion
+      const rotationDiff = currentRotation.angleTo(rotationStart.current)
+      setRotationProgress(Math.min(Math.abs(rotationDiff) / (Math.PI / 2), 1))
+
+      requestAnimationFrame(animate)
+    }
+
+    animate()
+  }, [grabbedFace])
 
   return (
     <group ref={cubeRef} position={[0, 0, -3]}>
@@ -121,68 +152,62 @@ function RubiksCube() {
           key={index}
           position={piece.position}
           colors={piece.colors}
-          onSelect={handleSelect}
-          isSelected={selectedFace?.piece === piece}
-          rotatingFace={rotatingFace}
+          onGrab={handleGrab}
+          onRelease={handleRelease}
+          isGrabbed={grabbedFace?.piece === piece}
+          rotationProgress={rotationProgress}
         />
       ))}
+      <group ref={controllerRef} />
     </group>
   )
 }
 
-function CubePiece({ position, colors, onSelect, isSelected, rotatingFace }) {
-  const meshRef = useRef()
-
-  // Apply rotation animation if this piece is part of the rotating face
-  useEffect(() => {
-    if (!rotatingFace || !meshRef.current) return
-
-    const { axis, layer, direction } = rotatingFace
-    const piecePosition = new Vector3(...position)
-
-    // Check if this piece is on the rotating layer
-    if (Math.abs(piecePosition[axis] - layer) < 0.1) {
-      // Apply rotation animation
-      const rotationAxis = new Vector3()
-      rotationAxis[axis] = 1
-
-      const targetQuaternion = new Quaternion().setFromAxisAngle(rotationAxis, (direction * Math.PI) / 2)
-
-      // Animate rotation
-      let startTime = null
-      const duration = 500 // ms
-
-      const animate = (time) => {
-        if (!startTime) startTime = time
-        const elapsed = time - startTime
-        const progress = Math.min(elapsed / duration, 1)
-
-        const currentQuaternion = new Quaternion().slerp(targetQuaternion, progress)
-        meshRef.current.quaternion.copy(currentQuaternion)
-
-        if (progress < 1) {
-          requestAnimationFrame(animate)
-        }
-      }
-
-      requestAnimationFrame(animate)
-    }
-  }, [rotatingFace, position])
+function CubePiece({ 
+  position, 
+  colors, 
+  onGrab, 
+  onRelease, 
+  isGrabbed, 
+  rotationProgress 
+}: { 
+  position: [number, number, number]
+  colors: CubePiece['colors']
+  onGrab: (piece: CubePiece, face: string) => void
+  onRelease: () => void
+  isGrabbed: boolean
+  rotationProgress: number
+}) {
+  const meshRef = useRef<Group>(null)
 
   return (
-    <Interactive onSelect={() => onSelect({ position, colors }, detectFace(position))}>
-      <group ref={meshRef} position={position} scale={isSelected ? [1.05, 1.05, 1.05] : [1, 1, 1]}>
+    <Interactive
+      onSelect={() => onGrab({ position, colors }, detectFace(position))}
+      onSelectEnd={onRelease}
+    >
+      <group
+        ref={meshRef}
+        position={position}
+        scale={isGrabbed ? [1.1, 1.1, 1.1] : [1, 1, 1]}
+      >
         <Box args={[CUBE_SIZE, CUBE_SIZE, CUBE_SIZE]}>
-          {/* Generate the 6 faces of the cube piece */}
           {[
-            { dir: [0, 0, 1], color: colors.front || COLORS.black }, // Front
-            { dir: [0, 0, -1], color: colors.back || COLORS.black }, // Back
-            { dir: [0, 1, 0], color: colors.top || COLORS.black }, // Top
-            { dir: [0, -1, 0], color: colors.bottom || COLORS.black }, // Bottom
-            { dir: [1, 0, 0], color: colors.right || COLORS.black }, // Right
-            { dir: [-1, 0, 0], color: colors.left || COLORS.black }, // Left
+            { dir: [0, 0, 1], color: colors.front || COLORS.black },
+            { dir: [0, 0, -1], color: colors.back || COLORS.black },
+            { dir: [0, 1, 0], color: colors.top || COLORS.black },
+            { dir: [0, -1, 0], color: colors.bottom || COLORS.black },
+            { dir: [1, 0, 0], color: colors.right || COLORS.black },
+            { dir: [-1, 0, 0], color: colors.left || COLORS.black },
           ].map((face, i) => (
-            <meshStandardMaterial key={i} attach={`material-${i}`} color={face.color} roughness={0.3} metalness={0.2} />
+            <meshStandardMaterial
+              key={i}
+              attach={`material-${i}`}
+              color={face.color}
+              roughness={0.3}
+              metalness={0.2}
+              opacity={isGrabbed ? 0.8 : 1}
+              transparent={isGrabbed}
+            />
           ))}
         </Box>
       </group>
@@ -191,8 +216,8 @@ function CubePiece({ position, colors, onSelect, isSelected, rotatingFace }) {
 }
 
 // Helper functions for cube logic
-function initializeCubeState() {
-  const pieces = []
+function initializeCubeState(): CubePiece[] {
+  const pieces: CubePiece[] = []
   const offset = (CUBE_DIMENSIONS - 1) / 2
 
   // Generate all pieces of the cube
@@ -211,15 +236,51 @@ function initializeCubeState() {
           continue
         }
 
-        const position = [(x - offset) * CUBE_SPACING, (y - offset) * CUBE_SPACING, (z - offset) * CUBE_SPACING]
+        const position: [number, number, number] = [
+          (x - offset) * CUBE_SPACING,
+          (y - offset) * CUBE_SPACING,
+          (z - offset) * CUBE_SPACING
+        ]
 
-        const colors = {
-          right: x === CUBE_DIMENSIONS - 1 ? COLORS.red : null,
-          left: x === 0 ? COLORS.orange : null,
-          top: y === CUBE_DIMENSIONS - 1 ? COLORS.white : null,
-          bottom: y === 0 ? COLORS.yellow : null,
-          front: z === CUBE_DIMENSIONS - 1 ? COLORS.blue : null,
-          back: z === 0 ? COLORS.green : null,
+        // Determine which faces are visible for this piece
+        const colors: CubePiece['colors'] = {}
+        
+        // Front face (z = max)
+        if (z === CUBE_DIMENSIONS - 1) colors.front = COLORS.blue
+        // Back face (z = 0)
+        if (z === 0) colors.back = COLORS.green
+        // Top face (y = max)
+        if (y === CUBE_DIMENSIONS - 1) colors.top = COLORS.white
+        // Bottom face (y = 0)
+        if (y === 0) colors.bottom = COLORS.yellow
+        // Right face (x = max)
+        if (x === CUBE_DIMENSIONS - 1) colors.right = COLORS.red
+        // Left face (x = 0)
+        if (x === 0) colors.left = COLORS.orange
+
+        // For edge and corner pieces, ensure all visible faces have colors
+        const isEdge = (x === 0 || x === CUBE_DIMENSIONS - 1) && 
+                      (y === 0 || y === CUBE_DIMENSIONS - 1) && 
+                      (z !== 0 && z !== CUBE_DIMENSIONS - 1) ||
+                      (x === 0 || x === CUBE_DIMENSIONS - 1) && 
+                      (z === 0 || z === CUBE_DIMENSIONS - 1) && 
+                      (y !== 0 && y !== CUBE_DIMENSIONS - 1) ||
+                      (y === 0 || y === CUBE_DIMENSIONS - 1) && 
+                      (z === 0 || z === CUBE_DIMENSIONS - 1) && 
+                      (x !== 0 && x !== CUBE_DIMENSIONS - 1)
+
+        const isCorner = (x === 0 || x === CUBE_DIMENSIONS - 1) && 
+                        (y === 0 || y === CUBE_DIMENSIONS - 1) && 
+                        (z === 0 || z === CUBE_DIMENSIONS - 1)
+
+        if (isEdge || isCorner) {
+          // Ensure all visible faces have colors
+          if (!colors.front && z === CUBE_DIMENSIONS - 1) colors.front = COLORS.blue
+          if (!colors.back && z === 0) colors.back = COLORS.green
+          if (!colors.top && y === CUBE_DIMENSIONS - 1) colors.top = COLORS.white
+          if (!colors.bottom && y === 0) colors.bottom = COLORS.yellow
+          if (!colors.right && x === CUBE_DIMENSIONS - 1) colors.right = COLORS.red
+          if (!colors.left && x === 0) colors.left = COLORS.orange
         }
 
         pieces.push({ position, colors })
@@ -230,7 +291,7 @@ function initializeCubeState() {
   return pieces
 }
 
-function detectFace(position) {
+function detectFace(position: [number, number, number]): string {
   const [x, y, z] = position
   const absX = Math.abs(x)
   const absY = Math.abs(y)
@@ -246,7 +307,7 @@ function detectFace(position) {
   }
 }
 
-function getFaceAxis(face) {
+function getFaceAxis(face: string): number {
   switch (face) {
     case "right":
     case "left":
@@ -262,11 +323,11 @@ function getFaceAxis(face) {
   }
 }
 
-function getLayerFromPosition(position, axis) {
+function getLayerFromPosition(position: [number, number, number], axis: number): number {
   return position[axis]
 }
 
-function rotateFace(cubeState, axis, layer, direction) {
+function rotateFace(cubeState: CubePiece[], axis: number, layer: number, direction: number): CubePiece[] {
   // Create a new state to avoid mutating the original
   const newState = [...cubeState]
 
@@ -278,7 +339,7 @@ function rotateFace(cubeState, axis, layer, direction) {
     // Create rotation matrix
     const rotationMatrix = new Matrix4()
     const rotationAxis = new Vector3()
-    rotationAxis[axis] = 1
+    rotationAxis.setComponent(axis, 1)
 
     rotationMatrix.makeRotationAxis(rotationAxis, (direction * Math.PI) / 2)
 
