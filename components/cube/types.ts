@@ -12,4 +12,15 @@ export interface CubePiece {
 
 export interface CubePieceProps {
   piece: CubePiece
+}
+
+export interface SelectedFace {
+  piece: CubePiece
+  face: keyof CubePiece['colors']
+}
+
+export interface RotatingFace {
+  pieces: CubePiece[]
+  axis: 'x' | 'y' | 'z'
+  angle: number
 } 
