@@ -19,6 +19,10 @@ const RubiksCubeModel = () => {
   const [rotationInProgress, setRotationInProgress] = useState(false)
   const xr = useXR()
 
+  // Add state for camera rotation
+  const [cameraRotation, setCameraRotation] = useState({ x: 0, y: 0 })
+  const rotationSpeed = 0.02
+
   useEffect(() => {
     // Initialize cube state
     const initialState: CubePiece[] = []
@@ -42,8 +46,27 @@ const RubiksCubeModel = () => {
     setCubeState(initialState)
   }, [])
 
-  const inputSource = xr.session?.inputSources[0]
-  useXRControllerButtonEvent(inputSource as any, "xr-standard-trigger" as any, (state: string) => {
+  // Handle thumbstick input for camera rotation
+  useFrame(() => {
+    const leftGamepad = xr.session?.inputSources[0]?.gamepad
+    const rightGamepad = xr.session?.inputSources[1]?.gamepad
+
+    if (leftGamepad) {
+      const x = leftGamepad.axes[2] // Left thumbstick X axis
+      if (Math.abs(x) > 0.1) { // Deadzone threshold
+        setCameraRotation(prev => ({ ...prev, y: prev.y + x * rotationSpeed }))
+      }
+    }
+
+    if (rightGamepad) {
+      const y = rightGamepad.axes[3] // Right thumbstick Y axis
+      if (Math.abs(y) > 0.1) { // Deadzone threshold
+        setCameraRotation(prev => ({ ...prev, x: prev.x + y * rotationSpeed }))
+      }
+    }
+  })
+
+  useXRControllerButtonEvent(xr.session?.inputSources[0] as any, "xr-standard-trigger" as any, (state: string) => {
     if (state === "default") {
       setIsGrabbing(true)
     } else if (state === "touched") {
@@ -258,7 +281,7 @@ const RubiksCubeModel = () => {
   }
 
   return (
-    <group ref={groupRef} position={[0, 1.6, -3]} rotation-x={-Math.PI / 8}>
+    <group ref={groupRef} position={[0, 1.6, -3]} rotation-x={-Math.PI / 8 + cameraRotation.x} rotation-y={cameraRotation.y}>
       {cubeState.map((piece, index) => (
         <CubePiece
           key={index}
