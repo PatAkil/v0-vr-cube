@@ -1,16 +1,10 @@
 "use client"
 
-import dynamic from "next/dynamic"
-
-// Import the Rubik's cube component dynamically to avoid SSR issues
-const RubiksCube = dynamic(() => import("@/components/rubiks-cube"), {
-  ssr: false,
-  loading: () => <div className="flex h-screen items-center justify-center">Loading 3D Scene...</div>,
-})
+import { RubiksCube } from "@/components/cube/RubiksCube"
 
 export default function Home() {
   return (
-    <main className="w-full h-screen">
+    <main className="w-screen h-screen">
       <RubiksCube />
     </main>
   )
